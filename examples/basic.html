@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - node material</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="container"></div>
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - Node-Based Material<br />
+			<a id="serialize" href="javascript:void(0);">Serialize and apply</a>
+		</div>
+
+		<script type="module">
+
+			import * as THREE from '../build/three.module.js';
+
+			import { GUI } from './jsm/libs/dat.gui.module.js';
+			import { OrbitControls } from './jsm/controls/OrbitControls.js';
+
+			import { TeapotBufferGeometry } from './jsm/geometries/TeapotBufferGeometry.js';
+
+			import { NodeMaterialLoader, NodeMaterialLoaderUtils } from './jsm/loaders/NodeMaterialLoader.js';
+
+			import * as Nodes from './jsm/nodes/Nodes.js';
+
+			var container = document.getElementById( 'container' );
+
+			var renderer, scene, lightGroup, camera, clock = new THREE.Clock(), fov = 50;
+			var frame = new Nodes.NodeFrame();
+			var teapot, mesh;
+			var controls;
+			var move = false;
+			var rtTexture, rtMaterial;
+			var gui;
+			var library = {};
+			var serialized = false;
+			var textures = {
+				brick: { url: 'textures/brick_diffuse.jpg' },
+				grass: { url: 'textures/terrain/grasslight-big.jpg' },
+				grassNormal: { url: 'textures/terrain/grasslight-big-nm.jpg' },
+				decalDiffuse: { url: 'textures/decal/decal-diffuse.png' },
+				decalNormal: { url: 'textures/decal/decal-normal.jpg' },
+				cloud: { url: 'textures/lava/cloud.png' },
+				spherical: { url: 'textures/envmap.png' },
+				flowerdecal : {url:'decal01.png'},
+				bluetoyellow : {url:'bluetoyellow.jpg'}
+			};
+
+			// var param = { example: new URL( window.location.href ).searchParams.get( 'e' ) || 'mesh-standard' };
+			// var param = { example: new URL( window.location.href ).searchParams.get( 'e' ) || 'physical' };
+			var param = { example: new URL( window.location.href ).searchParams.get( 'e' ) || 'testnew' };
+
+			function getTexture( name ) {
+
+				var texture = textures[ name ].texture;
+
+				if ( ! texture ) {
+
+					texture = textures[ name ].texture = new THREE.TextureLoader().load( textures[ name ].url );
+					texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+
+					library[ texture.uuid ] = texture;
+
+				}
+
+				return texture;
+
+			}
+
+			var premTexture, pmremCube;
+
+			function updatePREM( textureCube ) {
+
+				pmremCube = pmremCube || textureCube;
+
+				if ( ! pmremCube || ! renderer ) return;
+
+				var minFilter = pmremCube.minFilter;
+				var magFilter = pmremCube.magFilter;
+				var generateMipmaps = pmremCube.generateMipmaps;
+
+				var pmremGenerator = new THREE.PMREMGenerator( renderer );
+				premTexture = pmremGenerator.fromCubemap( pmremCube ).texture;
+				pmremGenerator.dispose();
+
+				pmremCube.minFilter = minFilter;
+				pmremCube.magFilter = magFilter;
+				pmremCube.generateMipmaps = generateMipmaps;
+				pmremCube.needsUpdate = true;
+
+				library[ premTexture.uuid ] = premTexture;
+
+			}
+
+			var cubemap = function () {
+
+				var path = "textures/cube/Park2/";
+				var format = '.jpg';
+				var urls = [
+					path + 'posx' + format, path + 'negx' + format,
+					path + 'posy' + format, path + 'negy' + format,
+					path + 'posz' + format, path + 'negz' + format
+				];
+
+				var textureCube = new THREE.CubeTextureLoader().load( urls, updatePREM );
+
+				library[ textureCube.uuid ] = textureCube;
+
+				return textureCube;
+
+			}();
+
+			window.addEventListener( 'load', init );
+
+			function init() {
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.uuid = THREE.MathUtils.generateUUID(); // generate to library
+				renderer.outputEncoding = THREE.sRGBEncoding;
+				container.appendChild( renderer.domElement );
+
+				scene = new THREE.Scene();
+
+				camera = new THREE.PerspectiveCamera( fov, window.innerWidth / window.innerHeight, 1, 1000 );
+				camera.position.x = 50;
+				camera.position.z = - 50;
+				camera.position.y = 30;
+				camera.target = new THREE.Vector3();
+
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.minDistance = 50;
+				controls.maxDistance = 200;
+
+				lightGroup = new THREE.Group();
+				scene.add( lightGroup );
+
+				var light;
+
+				lightGroup.add( new THREE.AmbientLight( 0x464646 ) );
+
+				light = new THREE.DirectionalLight( 0xffddcc, 1 );
+				light.position.set( 1, 0.75, 0.5 );
+				lightGroup.add( light );
+
+				light = new THREE.DirectionalLight( 0xccccff, 1 );
+				light.position.set( - 1, 0.75, - 0.5 );
+				lightGroup.add( light );
+
+				teapot = new TeapotBufferGeometry( 15, 18 );
+
+				mesh = new THREE.Mesh( teapot );
+				scene.add( mesh );
+
+				library[ renderer.uuid ] = renderer;
+				library[ camera.uuid ] = camera;
+				library[ mesh.uuid ] = mesh;
+
+				updatePREM();
+
+				window.addEventListener( 'resize', onWindowResize, false );
+
+				updateMaterial();
+
+				onWindowResize();
+				animate();
+
+			}
+
+			function clearGui() {
+
+				if ( gui ) gui.destroy();
+
+				gui = new GUI();
+
+				gui.add( param, 'example', {
+					'testnew': 'testnew',
+					'basic / mesh-standard': 'mesh-standard',
+					'basic / standard': 'standard',
+					'basic / physical': 'physical',
+					'basic / rim': 'rim',
+					'basic / layers': 'layers',
+					'adv / fresnel': 'fresnel',
+					'adv / toon': 'toon',
+
+				} ).onFinishChange( function () {
+
+					updateMaterial();
+
+				} );
+
+				gui.open();
+
+			}
+
+			function addGui( name, value, callback, isColor, min, max ) {
+
+				var node;
+
+				param[ name ] = value;
+
+				if ( isColor ) {
+
+					node = gui.addColor( param, name ).onChange( function () {
+
+						callback( param[ name ] );
+
+					} );
+
+				} else if ( typeof value === 'object' ) {
+
+					param[ name ] = value[ Object.keys( value )[ 0 ] ];
+
+					node = gui.add( param, name, value ).onChange( function () {
+
+						callback( param[ name ] );
+
+					} );
+
+				} else {
+
+					node = gui.add( param, name, min, max ).onChange( function () {
+
+						callback( param[ name ] );
+
+					} );
+
+				}
+
+				return node;
+
+			}
+
+			function updateMaterial() {
+
+				move = false;
+
+				lightGroup.visible = true;
+
+				if ( mesh.material ) mesh.material.dispose();
+
+				if ( rtTexture ) {
+
+					delete library[ rtTexture.texture.uuid ];
+
+					rtTexture.dispose();
+					rtTexture = null;
+
+				}
+
+				if ( rtMaterial ) {
+
+					rtMaterial.dispose();
+					rtMaterial = null;
+
+				}
+
+				var name = param.example,
+					defaultSide = THREE.DoubleSide,
+					mtl;
+
+				clearGui();
+
+				switch ( name ) {
+
+					// based on phong, but also has a mix in color
+					case 'testnew':
+
+						// MATERIAL
+
+						mtl = new Nodes.PhongNodeMaterial();
+
+						//mtl.color = // albedo (vec3)
+						//mtl.alpha = // opacity (float)
+						//mtl.specular = // specular color (vec3)
+						//mtl.shininess = // shininess (float)
+						//mtl.normal = // normal (vec3)
+						//mtl.emissive = // emissive color (vec3)
+						//mtl.ambient = // ambient color (vec3)
+						//mtl.shadow = // shadowmap (vec3)
+						//mtl.light = // custom-light (vec3)
+						//mtl.ao = // ambient occlusion (float)
+						//mtl.light = // input/output light (vec3)
+						//mtl.environment = // reflection/refraction (vec3)
+						//mtl.environmentAlpha = // environment alpha (float)
+						//mtl.position = // vertex local position (vec3)
+
+						var tex1 = new Nodes.TextureNode( getTexture( "bluetoyellow" ) );
+						var tex2 = new Nodes.TextureNode( getTexture( "flowerdecal" ) );
+
+						// var uv = new Nodes.UVNode();
+						var offset = new Nodes.FloatNode( 0 );
+						var scale = new Nodes.FloatNode( 1 );
+						var uv = new Nodes.UVNode();
+
+
+
+						// mtl.color = new Nodes.TextureNode( getTexture( "grass" ) );
+						// mtl.color = new Nodes.ColorNode( 0xEEEEEE );
+
+						// var uvOffset = new Nodes.OperatorNode(
+						// 	offset,
+						// 	uv,
+						// 	Nodes.OperatorNode.ADD
+						// );
+						//
+						// var uvScale = new Nodes.OperatorNode(
+						// 	uvOffset,
+						// 	scale,
+						// 	Nodes.OperatorNode.MUL
+						// );
+						//
+						// var mask = new Nodes.TextureNode( getTexture( "decalDiffuse" ), uvScale );
+						// var maskAlphaChannel = new Nodes.SwitchNode( mask, 'w' );
+						//
+						// var blend = new Nodes.MathNode(
+						// 	tex1,
+						// 	tex2,
+						// 	maskAlphaChannel,
+						// 	Nodes.MathNode.MIX
+						// );
+
+
+						mtl.color2 = new Nodes.ColorNode( 0xEEEEEE );
+
+						// var blend = new Nodes.OperatorNode(
+						// 	tex1,
+						// 	tex2,
+						// 	Nodes.OperatorNode.MUL
+						// );
+						var blend = new Nodes.OperatorNode(
+							tex2,
+							mtl.color2,
+							Nodes.OperatorNode.MUL
+						);
+
+						mtl.color = blend;
+
+
+
+						mtl.specular = new Nodes.FloatNode( .001 );
+						mtl.shininess = new Nodes.FloatNode( 100 );
+						// need roughness here it does not takes its lighting, it just overwrites the full color
+						// mtl.environment = new Nodes.CubeTextureNode( cubemap );
+
+						// mtl.environmentAlpha = mask;
+						// mtl.normal = new Nodes.NormalMapNode( new Nodes.TextureNode( getTexture( "grassNormal" ) ) );
+						// mtl.normal.scale = new Nodes.MathNode( mask, Nodes.MathNode.INVERT );
+
+
+						// GUI
+
+						addGui( 'color', mtl.color2.value.getHex(), function ( val ) {
+
+							mtl.color2.value.setHex( val );
+
+						}, true );
+
+						addGui( 'specular', mtl.specular.value, function ( val ) {
+
+							mtl.specular.value = val;
+
+						}, false, 0, 1 );
+
+						addGui( 'shininess', mtl.shininess.value, function ( val ) {
+
+							mtl.shininess.value = val;
+
+						}, false, 0, 1 );
+
+
+						break;
+
+
+
+
+				}
+
+				// set material
+
+				mtl.side = defaultSide;
+
+				mesh.material = mtl;
+
+			}
+
+			function onWindowResize() {
+
+				var width = window.innerWidth, height = window.innerHeight;
+
+				camera.aspect = width / height;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( width, height );
+
+				if ( rtTexture ) rtTexture.setSize( width, height );
+
+			}
+
+			document.getElementById( 'serialize' ).addEventListener( 'click', function () {
+
+				if ( serialized ) reset();
+				else serialize();
+
+				serialized = ! serialized;
+
+			} );
+
+			function reset() {
+
+				updateMaterial();
+
+				// gui
+
+				var div = document.getElementById( 'serialize' );
+				div.textContent = "Serialize and apply";
+
+			}
+
+			function serialize() {
+
+				var json = mesh.material.toJSON();
+
+				// replace uuid to url (facilitates the load of textures using url otherside uuid) e.g:
+
+				var cloud = getTexture( "cloud" );
+
+				NodeMaterialLoaderUtils.replaceUUID( json, cloud, "cloud" );
+
+				library[ "cloud" ] = cloud;
+
+				// --
+
+				var jsonStr = JSON.stringify( json );
+
+				console.log( jsonStr );
+
+				var loader = new NodeMaterialLoader( null, library ),
+					material = loader.parse( json );
+
+				mesh.material.dispose();
+
+				mesh.material = material;
+
+				// gui
+
+				var div = document.getElementById( 'serialize' );
+				div.textContent = "Click to reset - JSON Generate: " + ( jsonStr.length / 1024 ).toFixed( 3 ) + "kB";
+
+				if ( gui ) gui.destroy();
+
+				gui = null;
+
+			}
+
+			function animate() {
+
+				var delta = clock.getDelta();
+
+				if ( move ) {
+
+					var time = Date.now() * 0.005;
+
+					mesh.position.z = Math.cos( time ) * 10;
+					mesh.position.y = Math.sin( time ) * 10;
+
+				} else {
+
+					mesh.position.z = mesh.position.y = 0;
+
+				}
+
+				//mesh.rotation.z += .01;
+
+				// update material animation and/or gpu calcs (pre-renderer)
+
+				frame.setRenderer( renderer ).update( delta );
+
+				if ( mesh.material instanceof Nodes.NodeMaterial ) {
+
+					frame.updateNode( mesh.material );
+
+				}
+
+				// render to texture for sss/translucent material only
+
+				if ( rtTexture ) {
+
+					scene.overrideMaterial = rtMaterial;
+
+					renderer.setRenderTarget( rtTexture );
+					renderer.clear();
+					renderer.render( scene, camera );
+
+					scene.overrideMaterial = null;
+
+				}
+
+				renderer.setRenderTarget( null );
+				renderer.render( scene, camera );
+
+				requestAnimationFrame( animate );
+
+			}
+
+		</script>
+
+	</body>
+</html>
